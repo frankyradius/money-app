@@ -45,7 +45,7 @@
   // ---------------- UI ----------------
   var tg = window.Telegram && window.Telegram.WebApp;
   var demo = /[?&]demo=1/.test(location.search);
-  var S = { tab: 'list', month: monthKey(Date.now()), data: null, editId: null, addPlan: false };
+  var S = { tab: 'list', month: monthKey(Date.now()), data: null, editId: null, addPlan: false, acc: '', editCat: null, editPlan: null };
   var $ = function (id) { return document.getElementById(id); };
 
   if (tg) {
@@ -91,9 +91,15 @@
   function opts(list, sel) { return list.map(function (v) { return '<option' + (v === sel ? ' selected' : '') + '>' + esc(v) + '</option>'; }).join(''); }
 
   function renderHero() {
-    var d = S.data, total = 0;
-    Object.keys(d.balances || {}).forEach(function (k) { total += d.balances[k]; });
-    $('balTotal').textContent = '฿' + fmt(total);
+    var d = S.data, total = 0, bal = d.balances || {}, names = (d.accounts || []).map(function (a) { return a.name; });
+    Object.keys(bal).forEach(function (k) { total += bal[k]; if (names.indexOf(k) < 0) names.push(k); });
+    if (S.acc && !(S.acc in bal)) S.acc = '';
+    var sel = $('accSel');
+    sel.innerHTML = '<option value="">ทุกบัญชี</option>' + names.map(function (n) {
+      return '<option value="' + esc(n) + '"' + (n === S.acc ? ' selected' : '') + '>' + esc(n) + ' · ฿' + fmt(bal[n] || 0) + '</option>';
+    }).join('');
+    sel.value = S.acc;
+    $('balTotal').textContent = '฿' + fmt(S.acc ? (bal[S.acc] || 0) : total);
     if (d.bgUrl && $('bg').dataset.src !== d.bgUrl) { $('bg').dataset.src = d.bgUrl; $('bg').src = d.bgUrl; }
   }
 
@@ -141,16 +147,33 @@
     var over = p.actual > p.planned, color = over ? 'var(--over)' : p.paid ? 'var(--in)' : 'var(--main2)';
     var right = p.paid && !over ? '<span class="inc"><i class="ti ti-check"></i> ' + fmt(p.actual) + '</span>'
       : p.actual > 0 ? '<span class="' + (over ? 'exp' : '') + '">' + fmt(p.actual) + ' / ' + fmt(p.planned) + '</span>'
-        : '<span class="sub">' + fmt(p.planned) + (p.dueDay ? ' · ครบ ' + p.dueDay : '') + '</span>';
-    return '<div class="row">' + icon(c) + '<div class="name"><div>' + esc(p.name) + '</div><div class="bar"><i style="width:' + pct + '%;background:' + color + '"></i></div></div>' + right + '</div>';
+        : '<span class="sub">' + fmt(p.planned) + '</span>';
+    var due = p.dueDay ? dueText(p) : '';
+    var h = '<button class="row" data-act="planEdit" data-id="' + esc(p.id) + '">' + icon(c) + '<div class="name"><div>' + esc(p.name) + '</div>' +
+      (due ? '<div class="sub">' + due + '</div>' : '') +
+      '<div class="bar"><i style="width:' + pct + '%;background:' + color + '"></i></div></div>' + right + '<i class="ti ti-pencil sub"></i></button>';
+    if (S.editPlan === p.id) h += planForm(p);
+    return h;
   }
 
-  function planForm() {
+  function dueText(p) {
+    var d = p.dueThisMonth || p.dueDay, mName = MONTHS[Number(S.month.slice(5)) - 1];
+    return 'ครบ ' + d + ' ' + mName + (p.dueDay > d ? ' (เดือนนี้ไม่มีวันที่ ' + p.dueDay + ' เลยใช้วันสุดท้าย)' : '');
+  }
+  var DUE_HINT = '<div class="sub">ถ้าเดือนไหนไม่มีวันที่นี้ (เช่น 29–31 ในเดือน ก.พ. หรือ 31 ในเดือนที่มี 30 วัน) จะครบวันสุดท้ายของเดือนนั้นแทน</div>';
+
+  function planForm(p) {
     var cats = (S.data.categories || []).map(function (c) { return c.name + (c.direction === 'in' ? ' (รับ)' : ''); });
-    return '<div class="form"><input id="pName" placeholder="ชื่อ เช่น ค่าไฟ">' +
-      '<div class="two"><input id="pAmount" type="number" inputmode="decimal" placeholder="ยอด"><input id="pDue" type="number" min="1" max="31" placeholder="ครบทุกวันที่"></div>' +
-      '<select id="pCat">' + opts(cats) + '</select>' +
-      '<div class="btns"><button class="btn pri" data-act="addPlan">เพิ่มในแผน</button><button class="btn" data-act="planCancel">ยกเลิก</button></div></div>';
+    var cur = p ? p.category + (p.direction === 'in' ? ' (รับ)' : '') : null;
+    if (cur && cats.indexOf(cur) < 0) cats.unshift(cur);
+    var btns = p
+      ? '<button class="btn pri" data-act="savePlan">บันทึก</button><button class="btn del" data-act="delPlan">ลบ</button><button class="btn" data-act="planClose">ปิด</button>'
+      : '<button class="btn pri" data-act="addPlan">เพิ่มในแผน</button><button class="btn" data-act="planCancel">ยกเลิก</button>';
+    return '<div class="' + (p ? 'edit' : 'form') + '"><input id="pName" placeholder="ชื่อ เช่น ค่าไฟ" value="' + (p ? esc(p.name) : '') + '">' +
+      '<div class="two"><input id="pAmount" type="number" inputmode="decimal" placeholder="ยอด" value="' + (p ? p.planned : '') + '">' +
+      '<input id="pDue" type="number" inputmode="numeric" min="1" max="31" placeholder="ครบทุกวันที่ (1–31)" value="' + (p && p.dueDay ? p.dueDay : '') + '"></div>' +
+      DUE_HINT + '<select id="pCat">' + opts(cats, cur) + '</select>' +
+      '<div class="btns">' + btns + '</div></div>';
   }
 
   function viewPlan() {
@@ -177,7 +200,9 @@
     h += '<div class="card"><h3>หมวดหมู่</h3>';
     d.categories.forEach(function (c) {
       h += '<div class="row">' + icon(c) + '<div class="name"><div>' + esc(c.name) + '</div><div class="sub">' + (c.direction === 'in' ? 'รายรับ' : 'รายจ่าย') + '</div></div>' +
+        '<button class="pill" data-act="editCat" data-name="' + esc(c.name) + '" data-dir="' + c.direction + '"><i class="ti ti-pencil"></i> แก้ไข</button>' +
         '<button class="pill" data-act="hideCat" data-name="' + esc(c.name) + '" data-dir="' + c.direction + '"><i class="ti ti-eye-off"></i> ซ่อน</button></div>';
+      if (S.editCat === c.direction + '|' + c.name) h += catForm(c);
     });
     h += '<div class="form"><input id="cName" placeholder="ชื่อหมวดใหม่"><div class="two">' +
       '<select id="cDir"><option value="out">รายจ่าย</option><option value="in">รายรับ</option></select>' +
@@ -189,6 +214,18 @@
     return h;
   }
 
+  function catForm(c) {
+    var icons = ICONS.slice(); if (!icons.some(function (i) { return i[0] === c.icon; })) icons.unshift([c.icon, c.icon]);
+    var colors = COLORS.slice(); if (colors.indexOf(c.color) < 0) colors.unshift(c.color);
+    editColor = c.color;
+    return '<div class="edit"><input id="ecName" value="' + esc(c.name) + '" placeholder="ชื่อหมวด"><div class="two">' +
+      '<select id="ecDir"><option value="out"' + (c.direction === 'out' ? ' selected' : '') + '>รายจ่าย</option><option value="in"' + (c.direction === 'in' ? ' selected' : '') + '>รายรับ</option></select>' +
+      '<select id="ecIcon">' + icons.map(function (i) { return '<option value="' + esc(i[0]) + '"' + (i[0] === c.icon ? ' selected' : '') + '>' + esc(i[1]) + '</option>'; }).join('') + '</select></div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap" id="ecColors">' + colors.map(function (x) { return '<button data-act="ecolor" data-color="' + x + '" style="width:30px;height:30px;border-radius:50%;background:' + x + ';outline:' + (x === c.color ? '3px solid var(--accent)' : 'none') + '"></button>'; }).join('') + '</div>' +
+      '<div class="sub">เปลี่ยนชื่อแล้ว รายการเก่าในหมวดนี้จะย้ายไปชื่อใหม่ด้วย</div>' +
+      '<div class="btns"><button class="btn pri" data-act="saveCat">บันทึก</button><button class="btn" data-act="catClose">ปิด</button></div></div>';
+  }
+
   function render() {
     renderHero();
     var v = S.tab === 'cats' ? viewCats() : S.tab === 'plan' ? viewPlan() : S.tab === 'set' ? viewSet() : viewList();
@@ -196,7 +233,7 @@
     var nm = $('nextM'); nm.style.visibility = S.month >= monthKey(Date.now()) ? 'hidden' : 'visible';
   }
 
-  var newColor = COLORS[0];
+  var newColor = COLORS[0], editColor = null;
   $('view').addEventListener('click', function (ev) {
     var el = ev.target.closest('[data-act]'); if (!el) return;
     var act = el.dataset.act, val = function (id) { var x = $(id); return x ? x.value.trim() : ''; };
@@ -210,13 +247,50 @@
       var go = function (yes) { if (yes) post('deleteTxn', { id: S.editId }).then(function (r) { if (r.ok) { toast('ลบแล้ว'); S.editId = null; load(); } }); };
       return tg && tg.showConfirm ? tg.showConfirm('ลบรายการนี้ใช่ไหม?', go) : go(window.confirm('ลบรายการนี้ใช่ไหม?'));
     }
-    if (act === 'planOpen') { S.addPlan = true; return render(); }
+    if (act === 'planOpen') { S.addPlan = true; S.editPlan = null; return render(); }
+    if (act === 'planEdit') { S.editPlan = S.editPlan === el.dataset.id ? null : el.dataset.id; S.addPlan = false; return render(); }
+    if (act === 'planClose') { S.editPlan = null; return render(); }
+    if (act === 'savePlan') {
+      var pc = val('pCat'), pdue = val('pDue');
+      if (!val('pName') || !(Number(val('pAmount')) > 0)) return toast('ใส่ชื่อและยอดก่อนนะครับ');
+      if (pdue !== '' && !(Number(pdue) >= 1 && Number(pdue) <= 31)) return toast('วันครบกำหนดต้องเป็น 1–31');
+      return post('updatePlan', { id: S.editPlan, patch: { name: val('pName'), amount: Number(val('pAmount')), dueDay: pdue === '' ? '' : Number(pdue),
+        direction: / \(รับ\)$/.test(pc) ? 'in' : 'out', category: pc.replace(/ \(รับ\)$/, '') } })
+        .then(function (r) { if (r.ok) { toast('แก้แผนแล้ว'); S.editPlan = null; load(); } });
+    }
+    if (act === 'delPlan') {
+      var pid = S.editPlan;
+      var goDel = function (yes) { if (yes) post('deletePlan', { id: pid }).then(function (r) { if (r.ok) { toast('ลบแผนแล้ว'); S.editPlan = null; load(); } }); };
+      return tg && tg.showConfirm ? tg.showConfirm('ลบรายการนี้ออกจากแผน? รายการจ่ายที่บันทึกแล้วยังอยู่ครบ', goDel) : goDel(window.confirm('ลบรายการนี้ออกจากแผน?'));
+    }
+    if (act === 'editCat') { var key = el.dataset.dir + '|' + el.dataset.name; S.editCat = S.editCat === key ? null : key; return render(); }
+    if (act === 'catClose') { S.editCat = null; return render(); }
+    if (act === 'ecolor') {
+      editColor = el.dataset.color;
+      [].forEach.call(document.querySelectorAll('#ecColors button'), function (b) { b.style.outline = b === el ? '3px solid var(--accent)' : 'none'; });
+      return;
+    }
+    if (act === 'saveCat') {
+      var ck = S.editCat, cdir = ck.slice(0, ck.indexOf('|')), cname = ck.slice(ck.indexOf('|') + 1);
+      if (!val('ecName')) return toast('ใส่ชื่อหมวดก่อนนะครับ');
+      return post('updateCategory', { name: cname, direction: cdir, patch: { name: val('ecName'), direction: val('ecDir'), icon: val('ecIcon'), color: editColor } })
+        .then(function (r) { if (r.ok) { toast('แก้หมวดแล้ว'); S.editCat = null; load(); } });
+    }
     if (act === 'planCancel') { S.addPlan = false; return render(); }
     if (act === 'addPlan') {
       var cat = val('pCat'), dir = / \(รับ\)$/.test(cat) ? 'in' : 'out';
       if (!val('pName') || !(Number(val('pAmount')) > 0)) return toast('ใส่ชื่อและยอดก่อนนะครับ');
-      return post('addPlan', { plan: { name: val('pName'), direction: dir, amount: Number(val('pAmount')), dueDay: Number(val('pDue')) || '', category: cat.replace(/ \(รับ\)$/, '') } })
-        .then(function (r) { if (r.ok) { S.addPlan = false; toast('เพิ่มแผนแล้ว'); load(); } });
+      if (val('pDue') !== '' && !(Number(val('pDue')) >= 1 && Number(val('pDue')) <= 31)) return toast('วันครบกำหนดต้องเป็น 1–31');
+      var dupe = (S.data.plans || []).some(function (x) { return x.name === val('pName') && x.direction === dir; });
+      var planBody = { plan: { name: val('pName'), direction: dir, amount: Number(val('pAmount')), dueDay: Number(val('pDue')) || '', category: cat.replace(/ \(รับ\)$/, '') } };
+      var doAdd = function (yes) {
+        if (!yes) return;
+        if (S.adding) return; S.adding = true;
+        post('addPlan', planBody).then(function (r) { S.adding = false; if (r.ok) { S.addPlan = false; toast('เพิ่มแผนแล้ว'); load(); } });
+      };
+      if (!dupe) return doAdd(true);
+      var q = 'มี "' + val('pName') + '" ในแผนแล้ว จะเพิ่มซ้ำอีกอันไหม?';
+      return tg && tg.showConfirm ? tg.showConfirm(q, doAdd) : doAdd(window.confirm(q));
     }
     if (act === 'low') {
       var lv = document.querySelector('[data-low="' + el.dataset.name + '"]').value;
@@ -251,11 +325,12 @@
   [].forEach.call(document.querySelectorAll('.tabs button'), function (b) {
     b.addEventListener('click', function () {
       [].forEach.call(document.querySelectorAll('.tabs button'), function (x) { x.classList.toggle('on', x === b); });
-      S.tab = b.dataset.tab; S.editId = null; if (S.data) render(); window.scrollTo(0, 0);
+      S.tab = b.dataset.tab; S.editId = null; S.editCat = null; S.editPlan = null; S.addPlan = false; if (S.data) render(); window.scrollTo(0, 0);
     });
   });
   $('prevM').addEventListener('click', function () { S.month = monthShift(S.month, -1); load(); });
   $('nextM').addEventListener('click', function () { S.month = monthShift(S.month, 1); load(); });
+  $('accSel').addEventListener('change', function () { S.acc = this.value; if (S.data) renderHero(); });
   $('bgBtn').addEventListener('click', function () { $('bgFile').click(); });
   $('bgFile').addEventListener('change', function () {
     var f = this.files && this.files[0]; if (!f) return;
