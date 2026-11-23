@@ -38,7 +38,35 @@
     });
   }
 
-  var App = { esc: esc, fmt: fmt, dayLabel: dayLabel, monthShift: monthShift, monthLabel: monthLabel, donutArcs: donutArcs };
+  /** Spending vs plan per category (หน้าหมวด). look(name) gives {icon, color}. */
+  function catPlanHtml(cp, look) {
+    var rows = (cp && cp.rows) || [];
+    var planned = rows.filter(function (r) { return r.planned > 0; }), extra = rows.filter(function (r) { return !r.planned && r.actual > 0; });
+    if (!planned.length && !extra.length) return '';
+    var row = function (r) {
+      var c = look(r.name), over = r.planned > 0 && r.actual > r.planned;
+      var w = r.planned > 0 ? Math.min(100, r.actual * 100 / r.planned) : 100;
+      var note = !r.planned ? '' : over ? '<span class="exp">เกินแผน ' + fmt(r.actual - r.planned) + '</span>'
+        : r.actual > 0 ? '<span class="sub">เหลือ ' + fmt(r.planned - r.actual) + '</span>' : '<span class="sub">ยังไม่ได้จ่าย</span>';
+      return '<div class="row">' + icon(c) + '<div class="name"><div>' + esc(r.name) + '</div>' +
+        '<div class="bar"><i style="width:' + w + '%;background:' + (over ? 'var(--over)' : c.color) + '"></i></div>' + (note ? '<div class="note">' + note + '</div>' : '') + '</div>' +
+        '<span class="amt">' + fmt(r.actual) + (r.planned > 0 ? '<span class="sub"> / ' + fmt(r.planned) + '</span>' : '') + '</span></div>';
+    };
+    var used = cp.planTotal ? Math.round(cp.actualTotal * 100 / cp.planTotal) : 0;
+    var extraSum = extra.reduce(function (s, r) { return s + r.actual; }, 0);
+    return '<div class="card"><h3>เทียบกับแผน <span class="sub">จ่ายจริง ฿' + fmt(cp.actualTotal) + ' จากแผน ฿' + fmt(cp.planTotal) +
+      (cp.planTotal ? ' (ใช้ไป ' + used + '%)' : '') + '</span></h3>' + planned.map(row).join('') +
+      (extra.length ? '<div class="grp">จ่ายนอกแผน <span class="sub">หมวดที่ไม่มีในแผน · รวม ' + fmt(extraSum) + '</span></div>' + extra.map(row).join('') : '') + '</div>';
+  }
+
+  /** Total box for the plan tab header. */
+  function planTotalHtml(plans) {
+    var planned = 0, paid = 0;
+    (plans || []).forEach(function (p) { if (p.direction === 'out') { planned += Number(p.planned) || 0; paid += Number(p.actual) || 0; } });
+    return '<span class="ptotal">รวมแผน ฿' + fmt(planned) + ' / เดือน<small>จ่ายแล้ว ฿' + fmt(paid) + '</small></span>';
+  }
+
+  var App = { esc: esc, fmt: fmt, dayLabel: dayLabel, monthShift: monthShift, monthLabel: monthLabel, donutArcs: donutArcs, catPlanHtml: catPlanHtml, planTotalHtml: planTotalHtml };
   window.App = App;
   if (typeof document === 'undefined') return;
 
@@ -131,7 +159,8 @@
 
   function viewCats() {
     var d = S.data, list = d.byCategory;
-    if (!list.length) return '<p class="empty">เดือนนี้ยังไม่มีรายจ่าย</p>';
+    var cmp = catPlanHtml(d.catPlan, function (n) { return catOf(n, 'out'); });
+    if (!list.length) return '<p class="empty">เดือนนี้ยังไม่มีรายจ่าย</p>' + cmp;
     var arcs = donutArcs(list, 40);
     var svg = '<svg width="190" height="190" viewBox="0 0 120 120"><g transform="rotate(-90 60 60)" fill="none" stroke-width="15">' +
       arcs.map(function (a) { return '<circle cx="60" cy="60" r="40" stroke="' + a.color + '" stroke-dasharray="' + a.dasharray + '" stroke-dashoffset="' + a.dashoffset + '"/>'; }).join('') +
@@ -139,7 +168,7 @@
     return '<div class="donut">' + svg + '</div>' + list.map(function (c) {
       return '<div class="row">' + icon(c) + '<div class="name"><div>' + esc(c.name) + ' <span class="sub">' + c.pct + '%</span></div>' +
         '<div class="bar"><i style="width:' + c.pct + '%;background:' + c.color + '"></i></div></div><span>' + fmt(c.amount) + '</span></div>';
-    }).join('');
+    }).join('') + cmp;
   }
 
   function planRow(p) {
@@ -158,7 +187,7 @@
 
   function dueText(p) {
     var d = p.dueThisMonth || p.dueDay, mName = MONTHS[Number(S.month.slice(5)) - 1];
-    return 'ครบ ' + d + ' ' + mName + (p.dueDay > d ? ' (เดือนนี้ไม่มีวันที่ ' + p.dueDay + ' เลยใช้วันสุดท้าย)' : '');
+    return 'ครบ ' + d + ' ' + mName + (p.dueDay > d ? ' (เดือนนี้ไม่มีวันที่ ' + p.dueDay + ' เลยใช้วันสุดท้าย)' : '') + (p.remind === false ? ' · ไม่แจ้งเตือน' : '');
   }
   var DUE_HINT = '<div class="sub">ถ้าเดือนไหนไม่มีวันที่นี้ (เช่น 29–31 ในเดือน ก.พ. หรือ 31 ในเดือนที่มี 30 วัน) จะครบวันสุดท้ายของเดือนนั้นแทน</div>';
 
@@ -173,13 +202,14 @@
       '<div class="two"><input id="pAmount" type="number" inputmode="decimal" placeholder="ยอด" value="' + (p ? p.planned : '') + '">' +
       '<input id="pDue" type="number" inputmode="numeric" min="1" max="31" placeholder="ครบทุกวันที่ (1–31)" value="' + (p && p.dueDay ? p.dueDay : '') + '"></div>' +
       DUE_HINT + '<select id="pCat">' + opts(cats, cur) + '</select>' +
+      '<label class="chk"><input type="checkbox" id="pRemind"' + (p && p.remind === false ? '' : ' checked') + '> แจ้งเตือนบิลก่อนวันครบกำหนด (19:00)</label>' +
       '<div class="btns">' + btns + '</div></div>';
   }
 
   function viewPlan() {
     var ps = S.data.plans, outs = ps.filter(function (p) { return p.direction === 'out'; }), ins = ps.filter(function (p) { return p.direction === 'in'; });
     var paid = outs.filter(function (p) { return p.paid; }).length;
-    var h = '<div class="card"><h3>แผนรายจ่าย <span class="sub">จ่ายแล้ว ' + paid + ' จาก ' + outs.length + ' รายการ</span></h3>' +
+    var h = '<div class="card"><h3 class="flex"><span>แผนรายจ่าย <span class="sub">จ่ายแล้ว ' + paid + ' จาก ' + outs.length + ' รายการ</span></span>' + planTotalHtml(ps) + '</h3>' +
       (outs.length ? outs.map(planRow).join('') : '<p class="empty">ยังไม่มีแผนรายจ่าย</p>') + '</div>';
     if (ins.length) h += '<div class="card"><h3>แผนรายรับ</h3>' + ins.map(planRow).join('') + '</div>';
     h += '<div class="card">' + (S.addPlan ? planForm() : '<button class="row" style="justify-content:center;color:var(--main)" data-act="planOpen"><i class="ti ti-plus"></i> เพิ่มรายการในแผน</button>') + '</div>';
@@ -255,7 +285,7 @@
       if (!val('pName') || !(Number(val('pAmount')) > 0)) return toast('ใส่ชื่อและยอดก่อนนะครับ');
       if (pdue !== '' && !(Number(pdue) >= 1 && Number(pdue) <= 31)) return toast('วันครบกำหนดต้องเป็น 1–31');
       return post('updatePlan', { id: S.editPlan, patch: { name: val('pName'), amount: Number(val('pAmount')), dueDay: pdue === '' ? '' : Number(pdue),
-        direction: / \(รับ\)$/.test(pc) ? 'in' : 'out', category: pc.replace(/ \(รับ\)$/, '') } })
+        direction: / \(รับ\)$/.test(pc) ? 'in' : 'out', category: pc.replace(/ \(รับ\)$/, ''), remind: $('pRemind') ? $('pRemind').checked : true } })
         .then(function (r) { if (r.ok) { toast('แก้แผนแล้ว'); S.editPlan = null; load(); } });
     }
     if (act === 'delPlan') {
@@ -282,7 +312,7 @@
       if (!val('pName') || !(Number(val('pAmount')) > 0)) return toast('ใส่ชื่อและยอดก่อนนะครับ');
       if (val('pDue') !== '' && !(Number(val('pDue')) >= 1 && Number(val('pDue')) <= 31)) return toast('วันครบกำหนดต้องเป็น 1–31');
       var dupe = (S.data.plans || []).some(function (x) { return x.name === val('pName') && x.direction === dir; });
-      var planBody = { plan: { name: val('pName'), direction: dir, amount: Number(val('pAmount')), dueDay: Number(val('pDue')) || '', category: cat.replace(/ \(รับ\)$/, '') } };
+      var planBody = { plan: { name: val('pName'), direction: dir, amount: Number(val('pAmount')), dueDay: Number(val('pDue')) || '', category: cat.replace(/ \(รับ\)$/, ''), remind: $('pRemind') ? $('pRemind').checked : true } };
       var doAdd = function (yes) {
         if (!yes) return;
         if (S.adding) return; S.adding = true;
@@ -355,6 +385,7 @@
       ok: true, totalIn: 18500, totalOut: 6050, balances: { 'เงินสด': 2450, 'กสิกร': 10000 },
       days: [{ day: today, net: -365, items: [t('T5', today + 9e6, 'out', 'กาแฟ', 'อาหาร', 65, 'เงินสด', 'text'), t('T4', today + 8e6, 'out', 'นมผง', 'ของใช้ลูก', 180, 'กสิกร', 'slip'), t('T3', today + 7e6, 'out', 'ข้าวกลางวัน', 'อาหาร', 120, 'เงินสด', 'voice')] },
         { day: y, net: 500, items: [t('T2', y + 6e6, 'in', 'ค่าขายของ', 'ขายของ', 500, 'กสิกร', 'text')] }],
+      catPlan: { planTotal: 11500, actualTotal: 6050, rows: [{ name: 'ค่าบ้าน', actual: 5000, planned: 5000 }, { name: 'บิล/ค่าน้ำไฟเน็ต', actual: 1210, planned: 1500 }, { name: 'เดินทาง/น้ำมัน', actual: 605, planned: 5000 }, { name: 'อาหาร', actual: 2420, planned: 0 }, { name: 'ของใช้ลูก', actual: 1815, planned: 0 }] },
       byCategory: [{ name: 'อาหาร', icon: 'tools-kitchen-2', color: '#B8582A', amount: 2420, pct: 40 }, { name: 'ของใช้ลูก', icon: 'baby-carriage', color: '#2F6F8F', amount: 1815, pct: 30 }, { name: 'บิล/ค่าน้ำไฟเน็ต', icon: 'bolt', color: '#4F6A85', amount: 1210, pct: 20 }, { name: 'เดินทาง/น้ำมัน', icon: 'car', color: '#B5524A', amount: 605, pct: 10 }],
       plans: [{ id: 'P1', name: 'ค่าบ้าน', direction: 'out', category: 'ค่าบ้าน', planned: 5000, actual: 5000, paid: true, dueDay: 5 }, { id: 'P2', name: 'ค่าไฟ', direction: 'out', category: 'บิล/ค่าน้ำไฟเน็ต', planned: 1500, actual: 1210, paid: false, dueDay: 25 },
         { id: 'P3', name: 'นม/ผ้าอ้อม', direction: 'out', category: 'ของใช้ลูก', planned: 1500, actual: 1815, paid: true, dueDay: null }, { id: 'P4', name: 'อินเทอร์เน็ต', direction: 'out', category: 'บิล/ค่าน้ำไฟเน็ต', planned: 600, actual: 0, paid: false, dueDay: 25 },
